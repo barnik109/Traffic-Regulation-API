@@ -71,6 +71,25 @@ const authenticateOfficer = (req, res, next) => {
 };
 
 // Endpoint to submit violation details (accessible to traffic officers only)
+async function submitToPinata(violationDetails) {
+    try {
+        const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'pinata_api_key': process.env.PINATA_API_KEY,
+                'pinata_secret_api_key': process.env.API_SECRET_KEY,
+            },
+            body: JSON.stringify(violationDetails)
+        });
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error submitting to Pinata:', error);
+        throw new Error('Failed to submit to Pinata');
+    }
+}
+
 app.post('/submit-violation', authenticateOfficer, async (req, res) => {
     const violationDetails = req.body;
 
@@ -78,7 +97,11 @@ app.post('/submit-violation', authenticateOfficer, async (req, res) => {
         // Insert violation details into the database
         const result = await ViolationModel.create(violationDetails);
 
-        res.json({ success: true, message: 'Violation details submitted successfully', result });
+        // Submit violation details to Pinata
+        const pinataResponse = await submitToPinata(violationDetails);
+
+        // Respond with success message and Pinata response
+        res.json({ success: true, message: 'Violation details submitted successfully', result, pinataResponse });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Failed to submit violation details' });
@@ -149,10 +172,25 @@ app.post('/register/user', async (req, res) => {
     const userData = req.body;
 
     try {
-        // Check if the email already exists
-        const existingUser = await UserModel.findOne({ email: userData.email });
+        // Check if any of the unique fields already exist
+        const existingUser = await UserModel.findOne({
+            $or: [
+                { username: userData.username },
+                { email: userData.email },
+                { licenseNumber: userData.licenseNumber },
+                { vehiclePlateNumber: userData.vehiclePlateNumber },
+                { phoneNumber: userData.phoneNumber }
+            ]
+        });
+
         if (existingUser) {
-            return res.status(400).json({ success: false, message: 'Email already exists' });
+            let errorMessage = 'This field is already used for: ';
+            if (existingUser.username === userData.username) errorMessage += 'Username ';
+            if (existingUser.email === userData.email) errorMessage += 'Email ';
+            if (existingUser.licenseNumber === userData.licenseNumber) errorMessage += 'License Number ';
+            if (existingUser.vehiclePlateNumber === userData.vehiclePlateNumber) errorMessage += 'Vehicle Plate Number ';
+            if (existingUser.phoneNumber === userData.phoneNumber) errorMessage += 'Phone Number ';
+            return res.status(400).json({ success: false, message: errorMessage.trim() });
         }
 
         // Insert user details into the database
